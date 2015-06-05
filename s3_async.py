@@ -7,8 +7,7 @@ import fnmatch
 from cli.log import LoggingApp
 from stat import S_ISDIR
 import StringIO
-import subprocess, threading
-import Queue
+import subprocess
 import commands
 
 import schedule
@@ -22,6 +21,10 @@ from boto.s3.key import Key
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
+# a new, asynchronous and more efficien way of doing concurrency
+# with coroutines and event loops
+import trollius as asyncio  # trollius is a port of asyncio for python2.6+
+from trollius import From
 
 __author__ = ['Giulio.Calzolari']
 
@@ -80,13 +83,13 @@ class ChangeHandler(FileSystemEventHandler):
 
 
     def notify(self):
-        t = threading.Thread(target=self.notify_exec, args=(self.current_notif,))
-        t.start()
+        t = asyncio.Task(self.notify_exec(self.current_notif))
         self.queue_thread_nofity.append(t)
 
+    @asyncio.coroutine
     def notify_exec(self,cfg):
         cmd = "echo 'refresh' | ssh  -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -o PasswordAuthentication=no -o ConnectTimeout=5 -o ConnectionAttempts=1 "+cfg["username"]+"@"+cfg["url"]+" -p "+str(cfg["port"])+" -i "+cfg["private_key"]+" 'cat > /tmp/.notify'"
-        command_run = subprocess.call([cmd ], shell=True)
+        command_run = yield From(asyncio.subprocess.call([cmd], shell=True))
         if command_run != 0:
             self.log.error("error to notify : " + cfg["url"] )
             #  increment attempt
@@ -110,6 +113,7 @@ class ChangeHandler(FileSystemEventHandler):
 
 
     def wait_to_notify(self):
+        loop = asyncio.get_event_loop()
         if self.refresh == False:
             # self.log.debug("Nothing to do")
             return
@@ -145,9 +149,9 @@ class ChangeHandler(FileSystemEventHandler):
             self.refresh = False
             
             # wait for all threads to finish
-            if self.queue_thread_nofity:
-                for t in self.queue_thread_nofity:
-                    t.join()
+            loop.run_until_complete(asyncio.wait(self.queue_thread_nofity))
+            loop.close()
+
 
             
 
@@ -160,6 +164,7 @@ class ChangeHandler(FileSystemEventHandler):
 
 
     def re_nofity(self):
+        loop = asyncio.get_event_loop()
         # list to reexecute
         
         if (len(self.queue_to_nofity) > 0 ):
@@ -172,9 +177,8 @@ class ChangeHandler(FileSystemEventHandler):
                 self.notify()
 
             # wait for all threads to finish
-            if self.queue_thread_nofity:
-                for t in self.queue_thread_nofity:
-                    t.join()
+            loop.run_until_complete(asyncio.wait(self.queue_thread_nofity))
+            loop.close()
         else:
             self.log.debug("List to re-execute empty")
             schedule.cancel_job(self.re_nofity)

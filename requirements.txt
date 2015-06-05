@@ -6,3 +6,5 @@ watchdog>=0.8.3
 boto>=2.36.0
 schedule>=0.3.1
 awscli>=1.7.29
+futures>=3.0.2
+trollius>=1.0.4
